@@ -1,0 +1,368 @@
+---
+title: "Suicide understanding and prevention"
+output: html_notebook
+author: "Vojtěch Jeřábek"
+date: "15.1.2021"
+---
+
+# Author's note
+V první řadě bych se chtěl omluvit, že tato zpráva je v češtinu, ale píšu jí narychlo těsně před odevzdáním. Prosím omluvte menší rozsah a horší kvalitu práce, v průběhu vánočních prázdnin, které jsem měl vyčleněné na semestrální práci, jsem onemocněl covid-19 s těžším průběhem a bohužel jsem strávil týden v posteli. Práce se tak najednou dost stížila, protože jsem se musel izolovat od zbytku rodiny, který nakonec byl později také testován pozitivně. Z těchto důvodů jsem na práci mohl pracovat až posledních pár dnů v lednu těsně před deadlinem, během kterých jsem byl zatížen péčí o rodinu, která je v izolaci a tak jsem jediný člen, co může jezdit na nákupy, apod. Zároveň musím asistovat otci, který má těžký průběh onemocnění už více jak 10 dní, s jeho pracovními povinnostmi. Děkuji za pochopení. 
+
+# Exploratory Analysis of The Suicide Dataset
+
+TASK: Load the dataset, visualize the main relationships and trends, preprocess the data, carry out dimensionality reduction and clustering. The main goal is to see whether there are regularities in suicide rates across countries, continents, periods of times, etc. You are supposed to conclude this subtask with a brief description of suicide patterns.
+
+We start with visualization of data to show relationships between continent, country, age, sex and GDP. For most of the visualisation we use suicides per 100 thousand people. This values give us good overview of frequency of suicides in each category.
+
+```{r}
+load(file="suicide.RData")
+library("glmnet")
+library("dplyr")
+library("caret")
+library("ggpubr")
+library("ggplot2")
+library(tidyverse)
+library(ggalt)
+#I am sorry if I have forgot some libraries and you have to install or load them.
+```
+
+
+## Global Trend
+
+The number of suicides per 100k is decreasing since it peaked in 1995. Although we were provided with data since 1980s, we have to consider insufficient size of the dataset. The fall of the Iron Curtain caused formation of many countries during the 1990s, because dataset contains only data of exsiting countries that might be the reason why the 1980s dataset lacks a lot of data. Average value is apprx. 13,15 suicides per 100k. 
+```{r}
+globalYear <- data %>% group_by(year) %>%
+  summarize(yearPopulation = sum(population),
+            yearSuicides = sum(suicides_no),
+            suicidesPer100k = (yearSuicides/yearPopulation)*100000,
+            .groups = "keep")
+globalAverage <- sum(globalYear$yearSuicides)/sum(globalYear$yearPopulation)*100000
+
+ggplot(globalYear, aes(x = year, y = suicidesPer100k)) +
+  geom_line(col = "orange", size = 1) + 
+  geom_point(col = "orange", size = 3) +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  labs(title = "Annual Suicides in the World", x = "Year", y = "Suicides per 100 thousand") +
+  scale_x_continuous(breaks = seq(1985, 2015, 2)) 
+
+```
+
+
+## Continent
+This plot shows overall and annual number of suicides per 100k for each continent. Europe has the highest overall but suicides are decreasing since 1995. Oceania and Americas have the opposite trend, they have increasing number of suicides. Data from Africa after 1995 seem suspiciously low, after closer examination of data from Africa we can consider African data insufficient because we have been provided with data from only four countries out of 55. Asian suicides have uncertain trend with periods of increasing and descending suicide numbers. Please take a look at both plots, we have not been able to combine them together in reasonable way.
+```{r}
+continent <- data %>% group_by(continent) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+continent$continent <- factor(continent$continent, ordered = T, levels = continent$continent)
+
+ggplot(continent, aes(x = continent, y =  suicidesPer100k, fill = continent)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  labs(title = "Overall Plot of Suicides per 100 thousand at Continents", x = "Continent", y = "Suicides per 100 thousand") + 
+  theme(legend.position = "none") + 
+  scale_fill_brewer(palette = "Set1")
+
+continentYear <- data %>% group_by(continent, year) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+
+ggplot(continentYear, aes(x = year, y =  suicidesPer100k, color = continent)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  scale_x_continuous(breaks = seq(1985, 2015, 2)) +
+  labs(title = "Annual Plot of Suicides per 100 thousand at Continents", x = "Year", y = "Suicides per 100 thousand", color = "Continent") +
+  scale_colour_brewer(palette = "Set1") 
+  #theme(legend.position = "none")
+  #scale_fill_manual(values = c('Africa' = "red", 'Americas' = "orange", 'Oceania' = "blue", "Asia" = "green", "Europe" = "purple"))
+```
+
+## Country
+Next plot contains overall numbers of suicides in each country. We have been provided with data from 100 countries, more specifically 38 European, 31 American, 23 Asian, 4 countries from Oceania and 4 from Africa. From color distribution is obvious that European countries have the highest suicide overall. The highest suicide rate of them all has Lithuania with more than 41 suicides per 100 thousand citizens. If we take into consideration historical details we can see that a lot of countries from east side of Iron Curtain are at the top of the list. 
+```{r}
+country <- data %>% group_by(country, continent) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+country$country <- factor(country$country, ordered = T, levels = country$country)
+
+eurN <- nrow(unique(data %>% filter(continent == "Europe") %>% select(country)))
+afrN <- nrow(unique(data %>% filter(continent == "Africa") %>% select(country)))
+ocnN <- nrow(unique(data %>% filter(continent == "Oceania") %>% select(country)))
+amrN <- nrow(unique(data %>% filter(continent == "Americas") %>% select(country)))
+asiN <- nrow(unique(data %>% filter(continent == "Asia") %>% select(country)))
+
+ggplot(country, aes(x = country, y =  suicidesPer100k, fill = continent)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 0.3) +
+  labs(title = "Overall Plot of Suicides per 100 thousand in Each Country", x = "Country", y = "Suicides per 100 thousand", fill = "Continent") + 
+  theme(legend.position = "bottom") + 
+  coord_flip() +
+  scale_fill_brewer(palette = "Set1") 
+
+```
+
+## Age
+From the plot is visible that risk of suicide increases with age. The oldest age group has the highest share of suicides among them. In the three oldest groups suicide rate is above average. Luckily suicide rate of children between 5 and 14 years of age is pretty low. The trend is same as with global values, suicide numbers are descending throughout all categories except for the youngest. In the 1980s there was a significant difference between suicides of other groups and the oldest one, more than 10 suicides per 100k. Readers have to cycle through both plots, we did not want to make them confusing by reducing them a ploting together.
+```{r}
+age <- data %>% group_by(age) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+age$age <- factor(age$age, ordered = T, levels = age$age)
+
+ggplot(age, aes(x = age, y =  suicidesPer100k, fill = age)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  labs(title = "Overall Plot of Suicides per 100 thousand at Different Age", x = "Age", y = "Suicides per 100 thousand") + 
+  theme(legend.position = "none") + 
+  scale_fill_brewer(palette = "Set1")
+
+ageYear <- data %>% group_by(age, year) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+
+ggplot(ageYear, aes(x = year, y =  suicidesPer100k, color = age)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  scale_x_continuous(breaks = seq(1985, 2015, 2)) +
+  labs(title = "Annual Plot of Suicides per 100 thousand at Different Age", x = "Year", y = "Suicides per 100 thousand", color = "Age") +
+  scale_colour_brewer(palette = "Set1") 
+```
+## Sex
+The number of suicides of men is approximately 3,5 times higher than women. The ration of suicides slightly decreased since 1995 in favor of men. While suicide rate of women seem to almost be constant throughout the years, the suicide rate of men increased by aprrox. 50% between 1985 and 1995. Despite difference in age  groups the ratio between male and female suicides stays without significant changes.
+```{r}
+sex <- data %>% group_by(sex) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+sex$sex <- factor(sex$sex, ordered = T, levels = sex$sex)
+
+ggplot(sex, aes(x = sex, y =  suicidesPer100k, fill = sex)) +
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  labs(title = "Overall Plot of Suicides per 100 thousand for Different Sex", x = "Age", y = "Suicides per 100 thousand") + 
+  theme(legend.position = "none") + 
+  scale_fill_brewer(palette = "Set1")
+
+sexYear <- data %>% group_by(sex, year) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+
+ggplot(sexYear, aes(x = year, y =  suicidesPer100k, color = sex)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = seq(1985, 2015, 2)) +
+  labs(title = "Annual Plot of Suicides per 100 thousand for Different Sex", x = "Year", y = "Suicides per 100 thousand", color = "Age") +
+  scale_colour_brewer(palette = "Set1") 
+
+sexAge <- data %>% group_by(sex, age) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+
+ggplot(sexAge, aes(x = age, y =  suicidesPer100k, fill = sex)) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  labs(title = "Overall Plot of Suicides per 100 thousand for Different Sex and Age", x = "Age", y = "Suicides per 100 thousand", fill = "Sex") +
+  scale_fill_brewer(palette = "Set1") 
+```
+
+## Age and Continent
+For people of Asia, Americas and Europe probability of suicide increases with age. Meanwhile Africa and Oceania have the highest suicide rate in the category 25-34. Asian people older than 75 years have the highest suicide ratio among all of the age groups and continents. For the two of the oldest age groups Asia suprasses Europe in suicide ratio despite the fact that Europe has the highest overall ratio.
+```{r}
+ageContinent <- data %>% group_by(continent, age) %>%
+  summarize(suicidesPer100k = (sum(suicides_no)/sum(population))*100000, .groups = "keep") %>%
+  arrange(suicidesPer100k) 
+
+ggplot(ageContinent, aes(x = age, y =  suicidesPer100k, fill = continent)) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  geom_hline(yintercept = globalAverage, linetype = 4, color = "black", size = 1) +
+  labs(title = "Overall Plot of Suicides per 100 thousand for Different Continent and Age", x = "Age", y = "Suicides per 100 thousand", fill = "Continent") +
+  scale_fill_brewer(palette = "Set1") 
+
+```
+ 
+
+
+# Hypothesis testing
+TASK: The outcome of the previous step should be a set of candidate hypotheses about suicide patterns. In this task you are supposed to formally test them. An example hypothesis could be: $H_0$: the overall suicide rate across continents does not change, $H_a$: there is at least a pair of continents whose overall suicide rates differ. You are supposed to propose and test at least 3 hypotheses.
+
+In the following chapter we present three hyptohesis that we have come up with from analysis of data.
+## Hypothesis 1
+We ask ourselves a question based on statistics from part 1. Does GDP of a country affect its suicide rate? We want to find correlation between those two statistics in the following hypothesis.
+
+$H_0$ : There is no monotonic association between number of suicides per 100k and average GDP per capita. 
+$H_a$ : There is a monotonic association between number of suicides per 100k and average GDP per capita. 
+
+We test this hypothesis with Pearson correlation test for $\alpha = 0.05$. Based on results of the Pearson test we can not reject $H_0$. That means there is no significant relationship between number of suicides per 100k and average GDP per capita.
+
+```{r}
+countryGlobal <- data %>% group_by(country) %>%
+  summarize(suicide_per_100k = (sum(suicides_no) / sum(population)) * 100000, .groups = "keep")
+
+avgGDPperCapitaGlobal <- data %>% group_by(country) %>% summarize(avgGDP = mean(gdp_per_capita), .groups = "keep") %>% arrange(desc(avgGDP))
+
+joinedData <- full_join(avgGDPperCapitaGlobal, countryGlobal)
+rownames(joinedData) <- joinedData$country
+
+ggplot(data = joinedData, mapping = aes(x = suicide_per_100k, y = avgGDP, label = country)) + geom_point(colour = 'dark blue') + geom_text(aes(label=country), size=2.5, nudge_y = 1200) + theme(legend.position = "none")
+
+cor.test(joinedData$suicide_per_100k, joinedData$avgGDP, method="pearson")
+
+library("ggpubr")
+ggscatter(joinedData, x = "suicide_per_100k", y = "avgGDP", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Average GDP per capita", ylab = "Per capita suicides")
+```
+
+## Hypothesis 2
+From data plots in part 1 there can be clearly seen that men commit suicide far more often than women. We want to check this hyptohesis.
+
+$H_0$: "There is no significant difference between suicide rate of men and women."
+$H_a$: "There is a significant difference between suicide rate of men and women."
+
+The process for rejecting/not rejecting the $H_0$ would be using the hypothesis test for comparing means with an unknown variance, using 0.05 as the critical value. First with F-test we conclude whether variances of suicides rates of both men and women are same or not. Because variances are not same we can not use Student's T-test but we have to use Welch's T-test. We are using Welch's test with $\alpha = 0.05$. This test rejects $H_0$ and thus we can say that there is a significant difference between suicide rate of men and women.
+```{r}
+#REJECT
+men <- data %>% filter(sex == "Male") %>% group_by(country) %>%
+  summarize(n = n(), suicide_per_100k = (sum(suicides_no) / sum(population)) * 100000, .groups = "keep")
+menVariance <- var(men$suicide_per_100k)
+
+women <- data %>% filter(sex == "Female") %>% group_by(country) %>%
+  summarize(n = n(), suicide_per_100k = (sum(suicides_no) / sum(population)) * 100000, .groups = "keep")
+
+var.test(x=men$suicide_per_100k, y=women$suicide_per_100k, alternative = "two.sided")
+
+t.test(x=men$suicide_per_100k, y=women$suicide_per_100k, alternative = "two.sided")
+
+```
+
+
+## Hypothesis 3
+United Kingdom and Australia are tied together under one crown, Australia served as place for UK's convicts and they are both members of NATO. Their standard of living is similar. We want to see if Australia's suicide rate is affected by being "The prison of UK", we test if there is a significant difference between their suicide rate.
+
+$H_0$: "There is no significant difference between suicide rate in Australia and United Kingdom."
+$H_a$: "There is a significant difference between suicide rate in Australia and United Kingdom."
+
+First with F-test we conclude whether variances of suicides rates of both countries are same or not. Because variances are not same we can not use Student's T-test but we have to use Welch's T-test. We are using Welch's test with $\alpha = 0.05$. This test rejects $H_0$ and thus we can say that there is a significant difference between suicide rate in UK and Australia.
+```{r}
+#REJECT
+Australia <- data %>% filter(country == "Australia") %>% group_by(year) %>%
+  summarize(n = n(), suicide_per_100k = (sum(suicides_no) / sum(population)) * 100000, .groups = "keep")
+
+
+UK <- data %>% filter(country == "United Kingdom") %>% group_by(year) %>%
+  summarize(n = n(), suicide_per_100k = (sum(suicides_no) / sum(population)) * 100000, .groups = "keep")
+
+var.test(x=Australia$suicide_per_100k, y=UK$suicide_per_100k, alternative = "two.sided")
+
+t.test(x=Australia$suicide_per_100k, y=UK$suicide_per_100k, alternative = "two.sided")
+
+
+```
+
+
+
+
+# Suicide Predictive Model
+TASK: Create a model that predicts the suicide rate based on the remaining variables. Propose a meaningful train/test scenario. Evaluate and compare the performance of the models, employ cross-validation to get an unbiased estimate. Utilize feature selection to simplify the models and improve their performance. Use at least one method that we touched in the course, but you can compare with other methods too (neural networks, gradient boosting trees, etc.).
+
+In the following chapter we will try to model the relationship between suicides number and other variables of dataset. We will create linear models, starting with basic multivariable linear model and then switching to more advanced methods such as LASSO and Ridge. We decided to use function learnAndTest from first homework, this function trains the specified model and then evaluates its performance with 10-fold cross-validation.
+```{r}
+#Function for creating a model and testing with 10-fold cross-validation 
+learnAndTest <- function(X, Y, modelType, ...) {
+  data <- data.frame(X, Y)
+   
+  train.control <- trainControl(method = "cv", number = 10) # 10-fold cross-validation
+  # Alternative to get more accurate, but slower evaluation:
+  # train.control <- trainControl(method = "LOOCV")
+ 
+  # Here we train the model using the versatile `train` function from the caret package
+  train(Y ~.,
+                 data = data,
+                 method = modelType,
+                 trControl = train.control,
+                 ...)
+   
+}
+```
+
+## Multivariable Linear Model
+First we train basic multivariable linear regression model where we use all of the features. Categorical variables had to be converted into dummy variables with function dummyVars. This expanded the dataset because now each country, countinent, age group and generation require its own variable. The variable sex was transformed to "is a male" variable, where 1 is if person is a male and 0 if is not. Accuracy of this model is around R-adjusted = 0.55 which is solid result but not were good. 
+```{r}
+#Convert variables to dummy variables
+dmy <- dummyVars(" ~ .", data = data%>%select(country, age, generation, continent))
+nSex <- ifelse(data$sex == "Male", 1, 0)
+trsf <- data.frame(predict(dmy, newdata = data))
+
+Y <- as.matrix(data %>% select(suicides_no))
+X <- as.matrix(data.frame(trsf, data%>%select(year, population, gdp_for_year, gdp_per_capita), nSex))
+colnames(Y) <- NULL
+
+# Multivariable linear model
+summary(learnAndTest(X, Y, "lm"))
+```
+
+##  Multivariable Linear Model with Only Significant Variables
+From results of previous model I selected only significant features. I have removed gdp_per_capita because it insignificant. The error "prediction from a rank-deficient fit may be misleading" was caused by NA values that can be seen in summary of model. This error was solved by removing continent and country.Uzbekistan variables. NA values were assigned to these variables because they were insignificant as other mentioned before. Performance of this "enhanced" model is not better than the previous one. We still achieved R-adjusted around 0.55 but this time without warning about rank-deficient fit. So that means this model is as precise as previous but now we do not have to worry about problem with multicolinearity. Our F-value has improved a slightly.
+
+```{r}
+#removed gdp_per_capita, continent, country.Uzbekistan
+dmy <- dummyVars(" ~ .", data = data%>%select(country, age, generation))
+nSex <- ifelse(data$sex == "Male", 1, 0)
+trsf <- data.frame(predict(dmy, newdata = data))
+Y <- as.matrix(data %>% select(suicides_no))
+X <- as.matrix(data.frame(subset(trsf, select = -c(country.Uzbekistan) ), data%>%select(year, population, gdp_for_year), nSex))
+colnames(Y) <- NULL
+
+#Multivariable lin
+summary(learnAndTest(X, Y, "lm"))
+
+```
+
+## LASSO and Ridge
+Lets continue with Ridge and LASSO models created from original X,Y values. LASSO and Ridge are more advanced methods and they might provide us better results. In these methods we do not have to remove variables as we did in the previos one. These methods should deal with overcomplexity and overfitting better than previous method. We hope that using this methods will give us better prediction accuracy. LASSO method can completely ignore some variables of model but Ridge can only change weight of coefficients assigned to each variable. Unfortunately results of both LASSO and Ridge are identical to the resutls of previous method.
+```{r}
+# LASSO model
+dmy <- dummyVars(" ~ .", data = data%>%select(country, age, generation, continent))
+nSex <- ifelse(data$sex == "Male", 1, 0)
+trsf <- data.frame(predict(dmy, newdata = data))
+
+Y <- as.matrix(data %>% select(suicides_no))
+X <- as.matrix(data.frame(trsf, data%>%select(year, population, gdp_for_year, gdp_per_capita), nSex))
+colnames(Y) <- NULL
+lambda_lasso <- expand.grid(lambda = 10^ seq(10, -3, length = 10), alpha = 1)
+print(learnAndTest(X, Y, "glmnet", tuneGrid = lambda_lasso))
+
+```
+
+```{r}
+#Ridge model
+
+lambda_ridge <- expand.grid(lambda = 10^ seq(10, -3, length = 10), alpha = 0)
+print(learnAndTest(X, Y, "glmnet", tuneGrid = lambda_ridge))
+```
+
+## Only attemp - polynomial regression
+This was atempt to create polynomial regression model, unfortunately we were not succesful.
+```{r}
+formula <- as.formula(paste(' ~ .^2 + ',paste('poly(',colnames(X),',2, raw=TRUE)[, 2]',collapse = ' + ')))
+#model.matrix(formula, data=data.frame(X))
+fit <- glmnet(y= Y,x=model.matrix(formula, data=data.frame(X)))
+library(plotmo) # for plotres
+plotres(fit)
+r2 <- fit$glmnet.fit$dev.ratio[which(fit$glmnet.fit$lambda == fit$lambda.1se)] 
+```
+
+# Discussion of the Results
+TASK: Provide a verbal summary of your results (approx. 10 sentences). Compare with an external suicide resource, an example could be: the WHO summary. Propose future work or potentially interesting tasks you could not solve with the given dataset.
+
+We start with first section, where we analyze data and describe visible trends. Our initial assumptions are based on a few basic plots, each targeting one variable of dataset. It is clearly visible that suicide trend is globaly decreasing. Next thing we can see is that men tend to commit suicide far more often than women. Suicides are more common between older people than younger. The leading continent in suicides is Europe. Most of African countries statistics are not provided in the dataset, this might give false representation of African suicide values.  The most populated country in the world - China did not provide data as well.
+
+In the second chapter, we presented 3 hypothesis that were inspired by our analysis of dataset. With help of correlation test, T-tests or F-tests we were able to determine whether or not should hyptohesis be rejected. Our hypothesis were targeted at difference between suicides number of UK and Australia, men and women and relationship between GDP and suicides number.
+
+In the third chapter, we created regression model to model the relationship between suicides number and other variables. We were able to create multivariable regression model that can explain 55% of suicides number. Using more advanced solutions such as LASSO or Ridge did not explanatory power of model.
+
+The WHO summary achieved results similar to ours. The suicide trend is globally decreasing, men commit suicide 3 times more often than women. Difference is in the size of WHO dataset that is bigger than ours.
+
+Future work goals are th preparation of better suicide prevention models using neural network and other forms of regression methods, so we would be able to explain suicides number with at least 75% accuracy. The potentially interesting tasks we could not solve with the given dataset are few. First, dataset lacks countries that are not existing anymore thus we do not have proper overview of history. Second, there is only a small number of countries from Africa and Asia that provide their suicide numbers. Most of those countries are developing countris thus we expect that their reporting abilities are going to improve over time. Beneficial information would be statistics about number of people treated in psychiatric facilities, number of homeless people, unemployment, it would be interesting to see if those numbers corellate with suicide numbers.
